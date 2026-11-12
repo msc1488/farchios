@@ -7,6 +7,31 @@ set -e -u
 
 echo "[farchios] настройка live-среды"
 
+## ---------- Идентификация дистрибутива ----------
+# ВАЖНО: эти файлы нельзя класть в airootfs — /etc/os-release принадлежит
+# пакету filesystem, /etc/lsb-release — пакету lsb-release. airootfs
+# копируется ДО pacstrap, поэтому pacman упадёт на конфликте файлов.
+cat > /etc/os-release <<'EOF'
+NAME="FarchiOs"
+PRETTY_NAME="FarchiOs (rolling)"
+ID=farchios
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;255;106;0"
+HOME_URL="https://farchios.dev/"
+DOCUMENTATION_URL="https://farchios.dev/docs"
+SUPPORT_URL="https://farchios.dev/support"
+BUG_REPORT_URL="https://github.com/farchios/farchios/issues"
+LOGO=farchios-logo
+EOF
+
+cat > /etc/lsb-release <<'EOF'
+DISTRIB_ID="FarchiOs"
+DISTRIB_RELEASE="rolling"
+DISTRIB_CODENAME="forge"
+DISTRIB_DESCRIPTION="FarchiOs (rolling) — gaming-first Arch"
+EOF
+
 ## ---------- Локаль ----------
 locale-gen
 
