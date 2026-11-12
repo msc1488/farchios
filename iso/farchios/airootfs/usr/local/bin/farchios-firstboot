@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# ============================================================
+#  farchios-firstboot — один раз при первом запуске системы
+#  Ставит драйверы GPU, применяет тюнинг, показывает приветствие.
+# ============================================================
+set -uo pipefail
+
+MARKER=/etc/farchios/firstboot.done
+LOG=/var/log/farchios-firstboot.log
+mkdir -p /etc/farchios
+
+if [[ -f "$MARKER" ]]; then
+    exit 0
+fi
+
+exec > >(tee -a "$LOG") 2>&1
+echo "=== FarchiOs first boot: $(date -Is) ==="
+
+# Ждём сеть максимум 30 секунд (без сети просто пропускаем установку)
+for _ in $(seq 1 30); do
+    if ping -c1 -W1 archlinux.org &>/dev/null; then break; fi
+    sleep 1
+done
+
+if ping -c1 -W1 archlinux.org &>/dev/null; then
+    echo "→ Сеть есть, настраиваю драйверы GPU"
+    /usr/local/bin/farchios-gpu-setup || echo "! gpu-setup завершился с ошибкой"
+    /usr/local/bin/farchios tune || echo "! tune завершился с ошибкой"
+else
+    echo "! Сети нет — пропускаю установку драйверов (запусти 'sudo farchios gpu' позже)"
+fi
+
+# Приветствие в терминале при следующем входе
+cat > /etc/motd <<'EOF'
+
+  FarchiOs — игровая система на базе Arch Linux
+  ─────────────────────────────────────────────
+  farchios welcome   что делать дальше
+  farchios doctor    проверить игровой стек
+  farchios update    обновить систему
+
+EOF
+
+touch "$MARKER"
+echo "=== Готово: $(date -Is) ==="

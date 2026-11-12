@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+# ============================================================
+#  farchios — единая утилита FarchiOs
+#  Использование: farchios <команда> [аргументы]
+# ============================================================
+set -uo pipefail
+
+FARCHIOS_VERSION="0.1.0-alpha"
+FARCHIOS_CODENAME="forge"
+
+if [[ -t 1 ]]; then
+    B=$'\e[1m'; DIM=$'\e[2m'; R=$'\e[0m'
+    ORANGE=$'\e[38;5;208m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; RED=$'\e[31m'; BLUE=$'\e[34m'
+else
+    B=""; DIM=""; R=""; ORANGE=""; GREEN=""; YELLOW=""; RED=""; BLUE=""
+fi
+
+ok()   { printf '%s✓%s %s\n' "$GREEN" "$R" "$*"; }
+warn() { printf '%s!%s %s\n' "$YELLOW" "$R" "$*"; }
+err()  { printf '%s✗%s %s\n' "$RED" "$R" "$*" >&2; }
+info() { printf '%s·%s %s\n' "$BLUE" "$R" "$*"; }
+hr()   { printf '%s\n' "────────────────────────────────────────────────────────"; }
+
+need_root() {
+    if [[ ${EUID} -ne 0 ]]; then
+        err "Нужны права root. Запусти: sudo farchios $*"
+        exit 1
+    fi
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------- banner
+cmd_banner() {
+    printf '%s' "$ORANGE"
+    cat <<'EOF'
+   ____                 _     _    ___
+  / __/__ _ _ __ ___| |__ (_)  / _ \  ___
+ / _// _` | '__/ __| '_ \| | | | | |/ __|
+/ /_| (_| | | | (__| | | | | | |_| |\__ \
+\____\__,_|_|  \___|_| |_|_|  \___/ |___/
+EOF
+    printf '%s' "$R"
+    printf '  %s%s «%s»%s\n' "$B" "$FARCHIOS_VERSION" "$FARCHIOS_CODENAME" "$R"
+    printf '  %sИгровая система на базе Arch Linux%s\n\n' "$DIM" "$R"
+}
+
+# ---------------------------------------------------------------- help
+cmd_help() {
+    cmd_banner
+    cat <<EOF
+${B}КОМАНДЫ${R}
+  ${ORANGE}welcome${R}        интерактивное приветствие / что делать дальше
+  ${ORANGE}info${R}           версия, ядро, GPU, DE, состояние тюнинга
+  ${ORANGE}doctor${R}         диагностика игрового стека (vulkan, proton, драйверы)
+  ${ORANGE}doctor --fix${R}   диагностика + попытка исправить найденное
+  ${ORANGE}gpu${R}            определить GPU и поставить нужные драйверы
+  ${ORANGE}tune${R}           применить игровой тюнинг (sysctl, zram, сервисы)
+  ${ORANGE}gaming${R}        доустановить/проверить игровой стек
+  ${ORANGE}aur${R}           установить AUR-хелпер paru
+  ${ORANGE}proton${R}        подсказка и установка Proton-GE
+  ${ORANGE}install${R}       установка FarchiOs на диск (из live-режима)
+  ${ORANGE}update${R}        полное обновление системы
+  ${ORANGE}version${R}       только версия
+
+${B}ПРИМЕРЫ${R}
+  farchios info
+  sudo farchios gpu
+  sudo farchios tune
+  farchios doctor
+EOF
+}
+
+# ---------------------------------------------------------------- info
+cmd_info() {
+    local kernel gpu de session
+    kernel=$(uname -r)
+    gpu=$(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display' | sed 's/^[^:]*: //' | head -n1)
+    de="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-неизвестно}}"
+    session="${XDG_SESSION_TYPE:-неизвестно}"
+
+    cmd_banner
+    printf '%sСистема%s\n' "$B" "$R"
+    printf '  Дистрибутив : %sFarchiOs %s «%s»%s\n' "$B" "$FARCHIOS_VERSION" "$FARCHIOS_CODENAME" "$R"
+    printf '  Ядро        : %s\n' "$kernel"
+    printf '  GPU         : %s\n' "${gpu:-не определён}"
+    printf '  Сессия      : %s / %s\n' "$de" "$session"
+    printf '  Пакетов     : %s\n' "$(pacman -Qq 2>/dev/null | wc -l)"
+
+    hr
+    printf '%sТюнинг%s\n' "$B" "$R"
+    if [[ -f /etc/sysctl.d/99-farchios-gaming.conf ]]; then
+        ok "sysctl-профиль применён"
+    else
+        warn "sysctl-профиль отсутствует (sudo farchios tune)"
+    fi
+    if compgen -G "/dev/zram*" >/dev/null; then
+        ok "zram активен ($(zramctl --output=NAME,SIZE,DISKS --noheadings 2>/dev/null | head -n1))"
+    else
+        warn "zram не активен"
+    fi
+    for svc in gamemode irqbalance ananicy-cpp earlyoom; do
+        if systemctl is-enabled "${svc}.service" >/dev/null 2>&1; then
+            ok "сервис ${svc} включён"
+        else
+            warn "сервис ${svc} не включён"
+        fi
+    done
+}
+
+# ---------------------------------------------------------------- doctor
+cmd_doctor() {
+    local fix=0
+    [[ "${1:-}" == "--fix" ]] && fix=1
+    local problems=0
+
+    hr
+    printf '%sДиагностика FarchiOs%s\n' "$B" "$R"
+    hr
+
+    # GPU / драйверы
+    local vendor=""
+    if lspci -nn 2>/dev/null | grep -qi '10de'; then vendor="nvidia"; fi
+    if lspci -nn 2>/dev/null | grep -qi '1002'; then vendor="${vendor:-amd}"; fi
+    if [[ -z "$vendor" ]] && lspci -nn 2>/dev/null | grep -qi '8086'; then vendor="intel"; fi
+
+    case "$vendor" in
+        nvidia)
+            if pacman -Qq nvidia-utils nvidia-dkms &>/dev/null; then ok "NVIDIA: драйвер установлен"; else
+                warn "NVIDIA: драйвер НЕ установлен"; problems=$((problems+1))
+                ((fix)) && farchios-gpu-setup
+            fi ;;
+        amd)
+            if pacman -Qq vulkan-radeon &>/dev/null; then ok "AMD: vulkan-radeon установлен"; else
+                warn "AMD: нет vulkan-radeon"; problems=$((problems+1))
+                ((fix)) && farchios-gpu-setup
+            fi ;;
+        intel)
+            if pacman -Qq vulkan-intel &>/dev/null; then ok "Intel: vulkan-intel установлен"; else
+                warn "Intel: нет vulkan-intel"; problems=$((problems+1))
+                ((fix)) && farchios-gpu-setup
+            fi ;;
+        *) warn "GPU не распознан — проверь lspci" ;;
+    esac
+
+    # Vulkan
+    if have vulkaninfo && vulkaninfo --summary &>/dev/null; then
+        ok "Vulkan работает"
+    else
+        warn "Vulkan не отвечает (vulkaninfo --summary)"; problems=$((problems+1))
+    fi
+
+    # 32-бит (Steam)
+    if pacman -Qq lib32-mesa &>/dev/null; then ok "32-битные библиотеки (multilib) есть"; else
+        warn "Нет lib32-mesa — Steam не запустится"; problems=$((problems+1))
+    fi
+
+    # Игровой стек
+    for p in steam lutris gamemode mangohud gamescope wine; do
+        if pacman -Qq "$p" &>/dev/null; then ok "пакет $p установлен"; else
+            warn "пакет $p отсутствует"; problems=$((problems+1))
+            ((fix)) && pacman -S --needed --noconfirm "$p"
+        fi
+    done
+
+    # Сжатие шейдеров Vulkan (важно для AMD/Intel)
+    if [[ -f /etc/environment ]] && grep -q RADV_PERFTEST /etc/environment; then
+        ok "RADV-тюнинг применён"
+    else
+        info "RADV-тюнинг не задан (включи: sudo farchios tune)"
+    fi
+
+    hr
+    if (( problems == 0 )); then
+        ok "Всё в порядке. Запускай игры."
+    else
+        warn "Найдено проблем: $problems"
+        ((fix)) || info "Запусти 'sudo farchios doctor --fix' для автопочинки"
+    fi
+}
+
+# ---------------------------------------------------------------- tune
+cmd_tune() {
+    need_root "$@"
+    info "Применяю игровой тюнинг..."
+
+    install -Dm644 /usr/local/share/farchios/sysctl/99-farchios-gaming.conf \
+        /etc/sysctl.d/99-farchios-gaming.conf 2>/dev/null || true
+    sysctl --system >/dev/null 2>&1 && ok "sysctl применён"
+
+    systemctl enable --now fstrim.timer 2>/dev/null && ok "fstrim.timer включён"
+
+    for svc in irqbalance ananicy-cpp earlyoom power-profiles-daemon; do
+        if pacman -Qq "$svc" &>/dev/null; then
+            systemctl enable --now "${svc}.service" 2>/dev/null && ok "включён ${svc}"
+        fi
+    done
+
+    # zram
+    if pacman -Qq zram-generator &>/dev/null; then
+        systemctl daemon-reload
+        systemctl start systemd-zram-setup@zram0.service 2>/dev/null && ok "zram поднят"
+    fi
+
+    # Переменные окружения для Vulkan/Mesa
+    if ! grep -q "RADV_PERFTEST" /etc/environment 2>/dev/null; then
+        cat >> /etc/environment <<'EOF'
+# FarchiOs: производительность Vulkan/Mesa
+RADV_PERFTEST=gpl
+MESA_SHADER_CACHE_MAX_SIZE=12G
+MESA_SHADER_CACHE_DISABLE=false
+mesa_glthread=true
+VKD3D_FEATURE_LEVEL=12_2
+DXVK_HUD=fps
+PROTON_ENABLE_NVAPI=1
+EOF
+        ok "добавлены переменные окружения (RADV, shader cache, DXVK)"
+    else
+        info "переменные окружения уже на месте"
+    fi
+
+    # GPU governor
+    if [[ -d /sys/class/drm/card0/device/hwmon ]]; then
+        for f in /sys/class/drm/card0/device/hwmon/hwmon*/power_dpm_force_performance_level; do
+            [[ -e "$f" ]] && echo high > "$f" 2>/dev/null && ok "AMD GPU: performance level = high"
+        done
+    fi
+
+    ok "Тюнинг готов. Часть изменений применится после перелогина."
+}
+
+# ---------------------------------------------------------------- gaming
+cmd_gaming() {
+    need_root "$@"
+    info "Проверяю игровой стек..."
+    local pkgs=(steam lutris gamemode lib32-gamemode gamescope mangohud lib32-mangohud
+                wine wine-mono winetricks vkd3d lib32-vkd3d obs-studio discord)
+    pacman -S --needed --noconfirm "${pkgs[@]}" && ok "Игровой стек на месте"
+
+    systemctl enable --now gamemoded.service 2>/dev/null && ok "gamemoded запущен"
+    usermod -aG gamemode "${SUDO_USER:-$USER}" 2>/dev/null && ok "пользователь добавлен в группу gamemode"
+}
+
+# ---------------------------------------------------------------- gpu
+cmd_gpu() {
+    need_root "$@"
+    exec /usr/local/bin/farchios-gpu-setup
+}
+
+# ---------------------------------------------------------------- aur
+cmd_aur() {
+    local user="${SUDO_USER:-$USER}"
+    if [[ ${EUID} -eq 0 && -z "${SUDO_USER:-}" ]]; then
+        err "paru нельзя собирать от root. Запусти от обычного пользователя."
+        exit 1
+    fi
+    if have paru; then ok "paru уже установлен"; return; fi
+    info "Устанавливаю paru..."
+    pacman -S --needed --noconfirm base-devel git
+    local tmp; tmp=$(mktemp -d)
+    git clone --depth=1 https://aur.archlinux.org/paru-bin.git "$tmp/paru-bin"
+    ( cd "$tmp/paru-bin" && makepkg -si --noconfirm )
+    rm -rf "$tmp"
+    ok "paru установлен"
+}
+
+# ---------------------------------------------------------------- proton
+cmd_proton() {
+    cat <<'EOF'
+Proton-GE (рекомендуется для игр вне Steam):
+
+  1. Установи ProtonUp-Qt:
+       paru -S protonup-qt
+  2. Запусти ProtonUp-Qt → Add version → GE-Proton → Download
+  3. Для Steam: Steam → Настройки → Совместимость →
+     включить Steam Play для всех игр.
+
+Автоматически (CLI):
+
+  paru -S proton-ge-custom-bin
+  mkdir -p ~/.steam/root/compatibilitytools.d
+  ln -sf /usr/share/steam/compatibilitytools.d/GE-Proton* ~/.steam/root/compatibilitytools.d/
+EOF
+}
+
+# ---------------------------------------------------------------- install
+cmd_install() {
+    need_root "$@"
+    if [[ ! -d /run/archiso ]]; then
+        err "Это не live-среда FarchiOs. Запускай из загруженного ISO."
+        exit 1
+    fi
+    cat <<'EOF'
+Установка FarchiOs на диск
+──────────────────────────
+Откроется archinstall. Рекомендуемые настройки:
+
+  • Диск         : выбери свой SSD/NVMe (всё будет стёрто!)
+  • ФС           : btrfs (снимки) или ext4 (проще)
+  • Профиль      : Desktop → KDE Plasma  (или minimal)
+  • Ядро         : linux
+  • Загрузчик    : systemd-boot (UEFI) / GRUB (BIOS)
+  • Доп. пакеты  : см. /etc/farchios/postinstall-packages.txt
+  • Post-install : /usr/local/bin/farchios-postinstall
+
+После установки: перезагрузись, зайди в систему и выполни
+  sudo farchios-postinstall
+EOF
+    read -r -p "Продолжить? [y/N] " a
+    [[ "${a,,}" == "y" ]] || exit 0
+    archinstall
+}
+
+# ---------------------------------------------------------------- update
+cmd_update() {
+    need_root "$@"
+    info "Обновляю систему (pacman -Syu)..."
+    pacman -Syu --noconfirm
+    if have paru && [[ -n "${SUDO_USER:-}" ]]; then
+        info "Обновляю AUR-пакеты..."
+        sudo -u "$SUDO_USER" paru -Sua --noconfirm
+    fi
+    ok "Готово. Перезагрузись, если обновилось ядро."
+}
+
+# ---------------------------------------------------------------- welcome
+cmd_welcome() {
+    cmd_banner
+    cat <<EOF
+${B}С чего начать${R}
+
+  1. ${ORANGE}Подключись к сети${R}
+       nmcli device wifi list && nmcli device wifi connect "<SSID>" password "<пароль>"
+
+  2. ${ORANGE}Поставь драйверы GPU${R}
+       sudo farchios gpu
+
+  3. ${ORANGE}Примени тюнинг${R}
+       sudo farchios tune
+
+  4. ${ORANGE}Проверь систему${R}
+       farchios doctor
+
+  5. ${ORANGE}Установи на диск${R}
+       sudo farchios install
+
+${B}Полезное${R}
+  • Proton-GE:  farchios proton
+  • AUR:        farchios aur
+  • MangoHud:   mangohud %command%   (в параметрах запуска Steam)
+  • GameMode:   gamemoderun %command%
+  • Gamescope:  gamescope -W 1920 -H 1080 -r 144 -- %command%
+EOF
+}
+
+# ---------------------------------------------------------------- dispatch
+case "${1:-help}" in
+    help|-h|--help|"") cmd_help ;;
+    welcome)            cmd_welcome ;;
+    info)               cmd_info ;;
+    doctor)             cmd_doctor "${2:-}" ;;
+    gpu)                cmd_gpu "$@" ;;
+    tune)               cmd_tune "$@" ;;
+    gaming)             cmd_gaming "$@" ;;
+    aur)                cmd_aur ;;
+    proton)             cmd_proton ;;
+    install)            cmd_install "$@" ;;
+    update)             cmd_update "$@" ;;
+    version|-v|--version) echo "FarchiOs $FARCHIOS_VERSION «$FARCHIOS_CODENAME»" ;;
+    *) err "Неизвестная команда: $1"; echo; cmd_help; exit 1 ;;
+esac

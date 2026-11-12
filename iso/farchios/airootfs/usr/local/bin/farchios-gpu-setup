@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# ============================================================
+#  farchios-gpu-setup — определение GPU и установка драйверов
+#  Идемпотентен: можно запускать сколько угодно раз.
+# ============================================================
+set -uo pipefail
+
+if [[ ${EUID} -ne 0 ]]; then
+    echo "Запусти через sudo: sudo farchios-gpu-setup" >&2
+    exit 1
+fi
+
+C_OK=$'\e[32m'; C_W=$'\e[33m'; C_ERR=$'\e[31m'; C_R=$'\e[0m'
+ok()   { printf '%s✓%s %s\n' "$C_OK" "$C_R" "$*"; }
+warn() { printf '%s!%s %s\n' "$C_W"  "$C_R" "$*"; }
+err()  { printf '%s✗%s %s\n' "$C_ERR" "$C_R" "$*"; }
+
+mapfile -t GPUS < <(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display')
+if [[ ${#GPUS[@]} -eq 0 ]]; then
+    err "GPU не найден через lspci. Установлен ли pciutils?"
+    exit 1
+fi
+
+printf 'Найдено видеоустройств: %d\n' "${#GPUS[@]}"
+printf '  %s\n' "${GPUS[@]}"
+
+has_nvidia=0; has_amd=0; has_intel=0
+for g in "${GPUS[@]}"; do
+    [[ "$g" == *"[10de:"* ]] && has_nvidia=1
+    [[ "$g" == *"[1002:"* ]] && has_amd=1
+    [[ "$g" == *"[8086:"* ]] && has_intel=1
+done
+
+# multilib нужен для 32-битных библиотек (Steam, Wine)
+if ! grep -q '^\[multilib\]' /etc/pacman.conf 2>/dev/null; then
+    warn "multilib отключён — включаю"
+    sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
+    pacman -Sy --noconfirm
+fi
+
+install_pkgs() {
+    local label="$1"; shift
+    printf '\n→ %s: %s\n' "$label" "$*"
+    pacman -S --needed --noconfirm "$@" || { err "Не удалось поставить: $*"; return 1; }
+    ok "$label готов"
+}
+
+if (( has_nvidia )); then
+    # Turing (RTX 20xx) и новее → можно nvidia-open-dkms; nvidia-dkms универсален.
+    nv_list=(nvidia-utils nvidia-settings lib32-nvidia-utils libva-nvidia-driver nvidia-dkms
+             linux-headers)
+    install_pkgs "NVIDIA" "${nv_list[@]}"
+    # Wayland + NVIDIA: включаем DRM KMS и modeset
+    if [[ -f /etc/mkinitcpio.conf ]] && ! grep -q 'nvidia_drm.modeset' /etc/kernel/cmdline 2>/dev/null; then
+        warn "Для NVIDIA на Wayland добавь в параметры ядра: nvidia_drm.modeset=1"
+    fi
+    if [[ -f /etc/modprobe.d/nvidia.conf ]]; then
+        grep -q 'NVreg_PreserveVideoMemoryAllocations' /etc/modprobe.d/nvidia.conf || \
+            echo 'options nvidia NVreg_PreserveVideoMemoryAllocations=1' >> /etc/modprobe.d/nvidia.conf
+    else
+        echo 'options nvidia NVreg_PreserveVideoMemoryAllocations=1' > /etc/modprobe.d/nvidia.conf
+    fi
+    systemctl enable --now nvidia-suspend.service nvidia-hibernate.service nvidia-resume.service 2>/dev/null
+    ok "NVIDIA: suspend/resume и сохранение VRAM настроены"
+fi
+
+if (( has_amd )); then
+    install_pkgs "AMD" mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon \
+        libva-mesa-driver lib32-libva-mesa-driver radeontop
+fi
+
+if (( has_intel )); then
+    install_pkgs "Intel" mesa lib32-mesa vulkan-intel lib32-vulkan-intel \
+        intel-media-driver libva-intel-driver
+fi
+
+printf '\n'
+ok "Драйверы GPU настроены. Перезагрузись (sudo reboot)."

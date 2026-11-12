@@ -1,0 +1,21 @@
+# Артефакты сборки
+work/
+out/
+*.iso
+*.iso.sha256
+*.img
+*.qcow2
+
+# Бэкапы от --quick
+profiledef.sh.farchios-backup
+
+# Редакторы
+.idea/
+.vscode/
+*.swp
+*~
+
+# ОС
+.DS_Store
+Thumbs.db
+desktop.ini

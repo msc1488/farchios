@@ -1,0 +1,14 @@
+[Unit]
+Description=FarchiOs first boot setup (GPU drivers, tuning, welcome)
+ConditionPathExists=!/etc/farchios/firstboot.done
+After=network-online.target sddm.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/farchios-firstboot
+RemainAfterExit=yes
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

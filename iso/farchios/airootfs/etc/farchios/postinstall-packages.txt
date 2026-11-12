@@ -1,0 +1,9 @@
+# Пакеты, которые рекомендует FarchiOs при установке через archinstall
+# (вкладка «Additional packages»). Можно вставить одной строкой.
+base base-devel linux linux-headers linux-firmware intel-ucode amd-ucode
+networkmanager pipewire pipewire-pulse pipewire-jack wireplumber
+sddm plasma-meta kde-applications-meta
+steam lutris gamemode lib32-gamemode gamescope mangohud lib32-mangohud
+wine wine-mono winetricks vkd3d lib32-vkd3d obs-studio discord firefox
+ananicy-cpp irqbalance zram-generator earlyoom power-profiles-daemon
+btrfs-progs dosfstools exfatprogs ntfs-3g grub efibootmgr os-prober

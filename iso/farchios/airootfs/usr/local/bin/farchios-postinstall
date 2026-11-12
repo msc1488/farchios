@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# ============================================================
+#  farchios-postinstall — доводка уже установленной системы
+#  Запускать в установленной FarchiOs (не в live):
+#      sudo farchios-postinstall
+# ============================================================
+set -uo pipefail
+
+if [[ ${EUID} -ne 0 ]]; then
+    echo "Запусти через sudo." >&2
+    exit 1
+fi
+
+C_OK=$'\e[32m'; C_W=$'\e[33m'; C_R=$'\e[0m'
+ok()   { printf '%s✓%s %s\n' "$C_OK" "$C_R" "$*"; }
+warn() { printf '%s!%s %s\n' "$C_W" "$C_R" "$*"; }
+step() { printf '\n\e[1m== %s ==\e[0m\n' "$*"; }
+
+REAL_USER="${SUDO_USER:-}"
+if [[ -z "$REAL_USER" || "$REAL_USER" == "root" ]]; then
+    warn "Запусти из сессии обычного пользователя (sudo farchios-postinstall),"
+    warn "иначе AUR-пакеты поставить не получится."
+fi
+
+step "1/6 Базовые сервисы"
+systemctl enable --now NetworkManager.service 2>/dev/null && ok "NetworkManager"
+systemctl enable --now bluetooth.service 2>/dev/null && ok "bluetooth"
+systemctl enable --now fstrim.timer 2>/dev/null && ok "fstrim.timer"
+systemctl enable --now sddm.service 2>/dev/null && ok "SDDM"
+
+step "2/6 Драйверы GPU"
+/usr/local/bin/farchios-gpu-setup || warn "проверь вывод выше"
+
+step "3/6 Тюнинг производительности"
+/usr/local/bin/farchios tune || warn "часть тюнинга не применилась"
+
+step "4/6 Брендинг FarchiOs"
+if [[ -f /usr/local/share/farchios/os-release ]]; then
+    cp /usr/local/share/farchios/os-release /etc/os-release
+    ok "/etc/os-release обновлён"
+fi
+if [[ -f /usr/local/share/farchios/fastfetch.jsonc ]]; then
+    for h in /home/*; do
+        [[ -d "$h" ]] || continue
+        install -Dm644 /usr/local/share/farchios/fastfetch.jsonc \
+            "$h/.config/fastfetch/config.jsonc"
+        chown "$(stat -c %U:%G "$h")" "$h/.config/fastfetch/config.jsonc"
+    done
+    ok "конфиг fastfetch для всех пользователей"
+fi
+
+step "5/6 AUR: Heroic, ProtonUp-Qt, DXVK"
+if [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+    if ! command -v paru >/dev/null; then
+        warn "paru не установлен — ставлю"
+        sudo -u "$REAL_USER" farchios aur || warn "paru не установился"
+    fi
+    if command -v paru >/dev/null; then
+        sudo -u "$REAL_USER" paru -S --needed --noconfirm \
+            heroic-games-launcher-bin protonup-qt dxvk-bin vkd3d-proton-bin 2>/dev/null \
+            && ok "AUR-игровой стек установлен" \
+            || warn "часть AUR-пакетов не установилась — повтори позже"
+    fi
+else
+    warn "пропущено: нет обычного пользователя в SUDO_USER"
+fi
+
+step "6/6 Проверка"
+/usr/local/bin/farchios doctor || true
+
+step "Готово"
+cat <<'EOF'
+Перезагрузись:  sudo reboot
+
+Дальше:
+  • farchios welcome
+  • Steam → Настройки → Совместимость → Steam Play для всех игр
+  • Для игр вне Steam: Lutris / Heroic
+EOF

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# FarchiOs
+
+      /\
+     /  \      FarchiOs
+    / /\ \     gaming-first Arch
+   / /  \ \
+  /_/    \_\
+

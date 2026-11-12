@@ -1,0 +1,182 @@
+# ============================================================
+#  FarchiOs — список пакетов ISO
+#  ТОЛЬКО официальные репозитории Arch (core/extra/multilib).
+#  AUR-пакеты (Heroic, ProtonUp-Qt, DXVK, MangoHud-Git) ставит
+#  farchios-postinstall уже в установленной системе.
+#  Любое имя здесь проверяй: pacman -Si <pkg>
+# ============================================================
+
+## ---------- База ----------
+base
+base-devel
+linux
+linux-headers
+linux-firmware
+linux-firmware-nvidia
+intel-ucode
+amd-ucode
+mkinitcpio
+mkinitcpio-archiso
+sudo
+nano
+vim
+git
+curl
+wget
+rsync
+jq
+unzip
+zip
+7zip
+reflector
+pacman-contrib
+
+## ---------- Файловые системы и диски ----------
+btrfs-progs
+dosfstools
+e2fsprogs
+exfatprogs
+ntfs-3g
+f2fs-tools
+xfsprogs
+mdadm
+lvm2
+cryptsetup
+gptfdisk
+parted
+smartmontools
+
+## ---------- Сеть ----------
+networkmanager
+network-manager-applet
+iwd
+wpa_supplicant
+bluez
+bluez-utils
+avahi
+nss-mdns
+openssh
+
+## ---------- Звук ----------
+pipewire
+pipewire-alsa
+pipewire-pulse
+pipewire-jack
+pipewire-audio
+wireplumber
+alsa-utils
+alsa-firmware
+sof-firmware
+pavucontrol
+helvum
+
+## ---------- Загрузка ----------
+grub
+efibootmgr
+os-prober
+grub-btrfs
+
+## ---------- Установщик ----------
+archinstall
+
+## ---------- Графика / Vulkan / медиа-кодеки ----------
+mesa
+mesa-utils
+vulkan-icd-loader
+vulkan-tools
+lib32-mesa
+lib32-vulkan-icd-loader
+libva
+libva-utils
+libva-intel-driver
+intel-media-driver
+vpl-gpu-rt
+dmidecode
+pciutils
+usbutils
+hwdetect
+
+## ---------- Рабочий стол: KDE Plasma ----------
+sddm
+plasma-meta
+# Wayland-сессия Plasma 6 входит в plasma-workspace (тянется plasma-meta),
+# отдельного пакета plasma-wayland-session больше нет.
+kde-cli-tools
+xdg-desktop-portal
+xdg-desktop-portal-kde
+xdg-user-dirs
+dolphin
+konsole
+kate
+ark
+gwenview
+spectacle
+okular
+kwallet-pam
+breeze-gtk
+qt5-wayland
+qt6-wayland
+powerdevil
+kinfocenter
+plasma-systemmonitor
+
+## ---------- Шрифты / локали ----------
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+ttf-liberation
+ttf-dejavu
+terminus-font
+glibc-locales
+
+## ---------- Игровой стек ----------
+steam
+lutris
+gamemode
+lib32-gamemode
+gamescope
+mangohud
+lib32-mangohud
+wine
+wine-mono
+winetricks
+vkd3d
+lib32-vkd3d
+discord
+obs-studio
+ffmpeg
+gst-plugins-good
+gst-plugins-bad
+gst-plugins-ugly
+gst-libav
+
+## ---------- Производительность ----------
+ananicy-cpp
+irqbalance
+zram-generator
+power-profiles-daemon
+earlyoom
+
+## ---------- Утилиты ----------
+htop
+btop
+fastfetch
+ripgrep
+fd
+fzf
+tree
+less
+man-db
+man-pages
+bash-completion
+zsh
+tmux
+
+## ---------- Браузер / мультимедиа ----------
+firefox
+vlc
+mpv
+
+## ---------- Диски / восстановление ----------
+gnome-disk-utility
+gparted
