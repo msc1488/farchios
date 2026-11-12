@@ -27,6 +27,7 @@ jobs:
 
       - name: Проверка синтаксиса
         run: |
+          chmod +x build.sh docker/build-in-container.sh
           bash -n build.sh
           bash -n iso/farchios/profiledef.sh
           bash -n iso/farchios/airootfs/root/customize_airootfs.sh

@@ -15,4 +15,4 @@ if [[ ! -e /dev/loop-control ]]; then
     exit 1
 fi
 
-exec ./build.sh "$@"
+exec bash ./build.sh "$@"
