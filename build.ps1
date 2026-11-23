@@ -90,7 +90,7 @@ elseif ($Mode -eq 'wsl') {
     }
 
     Info "Проверка archiso в WSL ($Distro)"
-    wsl -d $Distro -- bash -lc "command -v mkarchiso >/dev/null || sudo pacman -Sy --needed --noconfirm archiso"
+    wsl -d $Distro -- bash -lc "command -v mkarchiso >/dev/null || sudo pacman -Syu --needed --noconfirm archiso"
 
     $wslPath = (wsl -d $Distro -- wslpath -a "$Root").Trim()
     $argStr  = ($BuildArgs -join ' ')

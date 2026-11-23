@@ -27,7 +27,7 @@ Steam, Lutris, Wine, GameMode, Gamescope, MangoHud и включённым тю�
 | Игры | Steam, Lutris, Wine + Mono, vkd3d, GameMode, Gamescope, MangoHud, OBS |
 | Звук | PipeWire + WirePlumber, поддержка JACK |
 | Тюнинг | sysctl-профиль, zram-swap, `ananicy-cpp`, `irqbalance`, `earlyoom`, udev-правила для NVMe |
-| Установка | `archinstall` с готовым списком пакетов + `farchios-postinstall` |
+| Установка | `archinstall` с профилем FarchiOs, переносом системных файлов и firstboot-настройкой |
 | Брендинг | `os-release`, логотип, обои, конфиг fastfetch (SVG-исходники) |
 
 ## Чего пока нет
@@ -77,7 +77,7 @@ wsl --install -d Arch            # или установи "Arch Linux" из Mic
 Или внутри WSL:
 
 ```bash
-sudo pacman -Sy --needed archiso
+sudo pacman -Syu --needed archiso
 cd /mnt/c/Users/SystemX/Desktop/FarchiOs
 sudo ./build.sh
 ```
@@ -88,7 +88,7 @@ sudo ./build.sh
 ### Способ 3 — на реальном Arch
 
 ```bash
-sudo pacman -Sy --needed archiso
+sudo pacman -Syu --needed archiso
 sudo ./build.sh
 ```
 
@@ -124,11 +124,12 @@ sudo farchios tune      # применить профиль производит
 sudo farchios install   # установка на диск (archinstall)
 ```
 
-После установки:
-
-```bash
-sudo farchios-postinstall   # доводит систему до состояния «как с завода»
-```
+После установки фирменные файлы уже находятся на диске. При первом запуске
+`farchios-firstboot.service` проверит сеть, установит подходящий графический
+драйвер, применит системный профиль и включит GameMode для обычных пользователей.
+Если сеть недоступна, настройка не помечается завершённой: подключись к интернету
+и перезагрузи систему. `sudo farchios-postinstall` остаётся доступен для ручного
+повторного запуска.
 
 ### Игровые параметры запуска
 
@@ -189,7 +190,7 @@ FarchiOs/
 | `mkarchiso: loop device` | Контейнер запущен без `--privileged` |
 | `package not found: X` | Пакет переименован/удалён из Arch. Проверь `pacman -Si X` |
 | Чёрный экран при загрузке | В меню загрузчика выбери `failsafe / nomodeset` |
-| NVIDIA + Wayland артефакты | `sudo farchios gpu`, затем добавь `nvidia_drm.modeset=1` |
+| NVIDIA + Wayland артефакты | `sudo farchios gpu`, перезагрузка и проверка `cat /sys/module/nvidia_drm/parameters/modeset` |
 | Steam не стартует | Нет multilib/32-бит: `farchios doctor` покажет |
 
 ---

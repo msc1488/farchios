@@ -6,7 +6,8 @@
 #  Флаги:
 #      --no-validate   не проверять имена пакетов
 #      --clean         удалить work/ перед сборкой
-#      --quick         без сжатия xz (быстрая тестовая сборка)
+#      --quick         быстрая тестовая сборка (zstd)
+#      --validate-only только проверить пакетный список
 # ============================================================
 set -euo pipefail
 
@@ -18,12 +19,14 @@ OUT="$ROOT/out"
 VALIDATE=1
 CLEAN=0
 QUICK=0
+VALIDATE_ONLY=0
 
 for arg in "$@"; do
     case "$arg" in
         --no-validate) VALIDATE=0 ;;
         --clean)       CLEAN=1 ;;
         --quick)       QUICK=1 ;;
+        --validate-only) VALIDATE_ONLY=1 ;;
         -h|--help)     sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "Неизвестный флаг: $arg" >&2; exit 1 ;;
     esac
@@ -37,10 +40,11 @@ c_step() { printf '\n\e[1m==> %s\e[0m\n' "$*"; }
 # ---------------------------------------------------------------- проверки
 [[ ${EUID} -eq 0 ]] || { c_err "Запусти от root: sudo ./build.sh"; exit 1; }
 [[ -f "$PROFILE/profiledef.sh" ]] || { c_err "Профиль не найден: $PROFILE"; exit 1; }
+[[ -f "$PROFILE/packages.x86_64" ]] || { c_err "Список пакетов не найден: $PROFILE/packages.x86_64"; exit 1; }
 
-if ! command -v mkarchiso >/dev/null 2>&1; then
-    c_warn "archiso не установлен — устанавливаю"
-    pacman -Sy --needed --noconfirm archiso
+if (( ! VALIDATE_ONLY )) && ! command -v mkarchiso >/dev/null 2>&1; then
+    c_err "archiso не установлен. Установи его после полного обновления системы: sudo pacman -Syu archiso"
+    exit 1
 fi
 
 # ВАЖНО: mkarchiso берёт репозитории из профиля (iso/farchios/pacman.conf),
@@ -50,28 +54,44 @@ if ! grep -q '^\[multilib\]' "$PROFILE/pacman.conf"; then
     exit 1
 fi
 
-c_step "Синхронизация баз данных пакетов"
-pacman -Sy --noconfirm >/dev/null
-
 # ---------------------------------------------------------------- валидация
 if (( VALIDATE )); then
-    c_step "Проверка имён пакетов"
-    # Валидируем через pacman.conf ПРОФИЛЯ: только там гарантированно
-    # включён multilib, даже если на хосте он выключен.
+    c_step "Проверка имён пакетов (изолированная база pacman)"
+    # Важно: отдельная DBPath не меняет базы пакетов хост-системы.
     VCONF="$PROFILE/pacman.conf"
-    pacman -Sy --config "$VCONF" --noconfirm >/dev/null 2>&1 || true
+    VALIDATE_TMP="$(mktemp -d /tmp/farchios-pacman-validation.XXXXXX)"
+    VALIDATE_DB="$VALIDATE_TMP/db"
+    VALIDATE_CACHE="$VALIDATE_TMP/cache"
+    mkdir -p "$VALIDATE_DB" "$VALIDATE_CACHE"
 
-    mapfile -t PKGS < <(grep -vE '^[[:space:]]*(#|$)' "$PROFILE/packages.x86_64")
+    if ! pacman --config "$VCONF" --dbpath "$VALIDATE_DB" --cachedir "$VALIDATE_CACHE" -Sy --noconfirm; then
+        rm -rf "$VALIDATE_TMP"
+        c_err "Не удалось синхронизировать базы репозиториев профиля."
+        exit 1
+    fi
+
+    mapfile -t PKGS < <(
+        sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' "$PROFILE/packages.x86_64" |
+        grep -vE '^(#|$)'
+    )
     missing=()
     for p in "${PKGS[@]}"; do
-        pacman -Si --config "$VCONF" "$p" >/dev/null 2>&1 || missing+=("$p")
+        if ! pacman --config "$VCONF" --dbpath "$VALIDATE_DB" --cachedir "$VALIDATE_CACHE" -Si "$p" >/dev/null 2>&1; then
+            missing+=("$p")
+        fi
     done
+    rm -rf "$VALIDATE_TMP"
     if (( ${#missing[@]} > 0 )); then
         c_err "Не найдены в репозиториях: ${missing[*]}"
-        c_err "Убери их из iso/farchios/packages.x86_64 или добавь репозиторий."
+        c_err "Убери их из iso/farchios/packages.x86_64 или исправь репозитории."
         exit 1
     fi
     c_ok "Все ${#PKGS[@]} пакетов найдены"
+fi
+
+if (( VALIDATE_ONLY )); then
+    c_ok "Проверка завершена; сборка не запускалась."
+    exit 0
 fi
 
 # ---------------------------------------------------------------- сборка

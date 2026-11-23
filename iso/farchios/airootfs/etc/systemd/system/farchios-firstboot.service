@@ -1,14 +1,16 @@
 [Unit]
-Description=FarchiOs first boot setup (GPU drivers, tuning, welcome)
+Description=FarchiOs first boot setup (GPU drivers and gaming profile)
 ConditionPathExists=!/etc/farchios/firstboot.done
-After=network-online.target sddm.service
 Wants=network-online.target
+After=network-online.target
+Before=display-manager.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/farchios-firstboot
 RemainAfterExit=yes
 StandardOutput=journal+console
+TimeoutStartSec=20min
 
 [Install]
 WantedBy=multi-user.target

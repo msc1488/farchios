@@ -35,10 +35,8 @@ step "3/6 Тюнинг производительности"
 /usr/local/bin/farchios tune || warn "часть тюнинга не применилась"
 
 step "4/6 Брендинг FarchiOs"
-if [[ -f /usr/local/share/farchios/os-release ]]; then
-    cp /usr/local/share/farchios/os-release /etc/os-release
-    ok "/etc/os-release обновлён"
-fi
+# Не перезаписываем /etc/os-release: файл принадлежит базовому пакету Arch.
+# FarchiOs идентифицируется собственной CLI и брендингом fastfetch.
 if [[ -f /usr/local/share/farchios/fastfetch.jsonc ]]; then
     for h in /home/*; do
         [[ -d "$h" ]] || continue
@@ -53,7 +51,7 @@ step "5/6 AUR: Heroic, ProtonUp-Qt, DXVK"
 if [[ -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
     if ! command -v paru >/dev/null; then
         warn "paru не установлен — ставлю"
-        sudo -u "$REAL_USER" farchios aur || warn "paru не установился"
+        /usr/local/bin/farchios aur || warn "paru не установился"
     fi
     if command -v paru >/dev/null; then
         sudo -u "$REAL_USER" paru -S --needed --noconfirm \

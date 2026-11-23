@@ -21,14 +21,11 @@ quick:
 	sudo ./build.sh --quick
 
 validate:
-	@echo "==> Проверка пакетов (по конфигу профиля, с multilib)"
-	@pacman -Sy --config "$(PROFILE)/pacman.conf" --noconfirm >/dev/null 2>&1 || true
-	@grep -vE '^[[:space:]]*(#|$$)' $(PROFILE)/packages.x86_64 | while read -r p; do \
-		pacman -Si --config "$(PROFILE)/pacman.conf" "$$p" >/dev/null 2>&1 || echo "  ОТСУТСТВУЕТ: $$p"; \
-	done; echo "==> Готово"
+	sudo ./build.sh --validate-only
 
 lint:
 	bash -n build.sh
+	bash -n docker/build-in-container.sh
 	bash -n $(PROFILE)/profiledef.sh
 	bash -n $(PROFILE)/airootfs/root/customize_airootfs.sh
 	bash -n $(PROFILE)/airootfs/usr/local/bin/farchios

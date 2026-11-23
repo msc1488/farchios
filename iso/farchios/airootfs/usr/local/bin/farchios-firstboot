@@ -1,36 +1,42 @@
 #!/usr/bin/env bash
-# ============================================================
-#  farchios-firstboot — один раз при первом запуске системы
-#  Ставит драйверы GPU, применяет тюнинг, показывает приветствие.
-# ============================================================
-set -uo pipefail
+# FarchiOs first boot: retry on next boot if network/setup fails.
+set -Eeuo pipefail
 
 MARKER=/etc/farchios/firstboot.done
 LOG=/var/log/farchios-firstboot.log
-mkdir -p /etc/farchios
-
-if [[ -f "$MARKER" ]]; then
-    exit 0
-fi
+install -d -m 755 /etc/farchios
+[[ -e "$MARKER" ]] && exit 0
 
 exec > >(tee -a "$LOG") 2>&1
 echo "=== FarchiOs first boot: $(date -Is) ==="
 
-# Ждём сеть максимум 30 секунд (без сети просто пропускаем установку)
-for _ in $(seq 1 30); do
-    if ping -c1 -W1 archlinux.org &>/dev/null; then break; fi
-    sleep 1
+# Wait for DNS/network readiness. No marker is written if offline, so next boot retries.
+for _ in $(seq 1 45); do
+    if getent ahosts archlinux.org >/dev/null 2>&1; then
+        break
+    fi
+    sleep 2
 done
 
-if ping -c1 -W1 archlinux.org &>/dev/null; then
-    echo "→ Сеть есть, настраиваю драйверы GPU"
-    /usr/local/bin/farchios-gpu-setup || echo "! gpu-setup завершился с ошибкой"
-    /usr/local/bin/farchios tune || echo "! tune завершился с ошибкой"
-else
-    echo "! Сети нет — пропускаю установку драйверов (запусти 'sudo farchios gpu' позже)"
+if ! getent ahosts archlinux.org >/dev/null 2>&1; then
+    echo "Сеть недоступна. Настрой интернет и перезагрузи систему для повтора."
+    exit 1
 fi
 
-# Приветствие в терминале при следующем входе
+echo "→ Настройка драйверов GPU"
+/usr/local/bin/farchios-gpu-setup
+
+echo "→ Применение игрового профиля"
+/usr/local/bin/farchios tune
+
+if getent group gamemode >/dev/null 2>&1; then
+    while IFS=: read -r username _ uid _ _ home _; do
+        if [[ "$uid" -ge 1000 && "$uid" -lt 60000 && "$home" == /home/* ]]; then
+            usermod -aG gamemode "$username"
+        fi
+    done < /etc/passwd
+fi
+
 cat > /etc/motd <<'EOF'
 
   FarchiOs — игровая система на базе Arch Linux
@@ -42,4 +48,4 @@ cat > /etc/motd <<'EOF'
 EOF
 
 touch "$MARKER"
-echo "=== Готово: $(date -Is) ==="
+echo "=== Первый запуск успешно завершён: $(date -Is) ==="

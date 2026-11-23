@@ -39,7 +39,7 @@ MangoHud можно настроить интерактивно: `Shift+F12` п�
 |---|---|
 | Steam Linux Runtime / Proton (Valve) | по умолчанию |
 | Proton Experimental | новые игры, свежие фиксы |
-| GE-Proton | игры с видео-катсценами, античит-обходы, «не запускается» |
+| GE-Proton | игры с видео-катсценами и отдельными совместимостными исправлениями |
 
 Установка GE-Proton:
 
@@ -84,7 +84,8 @@ paru -S heroic-games-launcher-bin
 1. `farchios doctor` — нет ли софтверного рендера (`llvmpipe` вместо GPU).
 2. Проверь, что игра запускается через Vulkan (DXVK), а не OpenGL.
 3. Включи `gamemoderun` — он поднимает governor CPU в performance.
-4. Для AMD: `RADV_PERFTEST=gpl` уже прописан в `/etc/environment`.
+4. Не задавай глобальные DXVK/VKD3D/RADV-переменные без необходимости;
+   если конкретной игре нужна настройка, добавь её только в параметры запуска этой игры.
 5. Ограничь FPS через MangoHud (`fps_limit=144`) — стабильнее, чем «сколько
    получится», и меньше нагрузка на GPU.
 6. Проверь охлаждение: `sensors` / `btop`. Троттлинг выглядит как «игра
@@ -93,16 +94,19 @@ paru -S heroic-games-launcher-bin
 ## NVIDIA: отдельные грабли
 
 ```bash
-# Wayland + KMS (нужно для игр без тиринга)
-# добавь в параметры ядра:
-nvidia_drm.modeset=1 nvidia_drm.fbdev=1
+# farchios gpu записывает параметры модуля в /etc/modprobe.d/farchios-nvidia.conf.
+# После установки драйвера перезагрузи систему и проверь:
+cat /sys/module/nvidia_drm/parameters/modeset
 ```
 
-Для старых карт (до Turing) используй `nvidia-dkms`, для RTX 20xx+ лучше
-`nvidia-open-dkms`. `farchios gpu` ставит `nvidia-dkms` — универсальный вариант.
+Для Turing (GTX 16xx / RTX 20xx) и новее используется `nvidia-open-dkms`.
+Pascal (GTX 10xx), Maxwell (GTX 9xx/7xx) и более старые поколения не
+поддерживаются актуальным open kernel module; для них по умолчанию остаётся
+открытый драйвер Nouveau. Перед выбором legacy-драйвера проверь точную модель
+видеокарты и актуальную поддержку Arch Linux.
 
-VRAM и suspend: `NVreg_PreserveVideoMemoryAllocations=1` уже прописан
-`farchios gpu`, иначе после сна игры падают.
+VRAM и suspend: `NVreg_PreserveVideoMemoryAllocations=1` прописывается для поддерживаемых
+NVIDIA-карт командой `farchios gpu`.
 
 ## 32-бит (Steam)
 

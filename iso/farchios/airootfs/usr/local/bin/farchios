@@ -3,7 +3,7 @@
 #  farchios — единая утилита FarchiOs
 #  Использование: farchios <команда> [аргументы]
 # ============================================================
-set -uo pipefail
+set -Eeuo pipefail
 
 FARCHIOS_VERSION="0.1.0-alpha"
 FARCHIOS_CODENAME="forge"
@@ -29,6 +29,7 @@ need_root() {
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+pkg_installed() { pacman -Q "$1" >/dev/null 2>&1; }
 
 # ---------------------------------------------------------------- banner
 cmd_banner() {
@@ -75,7 +76,7 @@ EOF
 cmd_info() {
     local kernel gpu de session
     kernel=$(uname -r)
-    gpu=$(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display' | sed 's/^[^:]*: //' | head -n1)
+    gpu=$(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display' | sed 's/^[^:]*: //' | head -n1 || true)
     de="${XDG_CURRENT_DESKTOP:-${DESKTOP_SESSION:-неизвестно}}"
     session="${XDG_SESSION_TYPE:-неизвестно}"
 
@@ -99,7 +100,12 @@ cmd_info() {
     else
         warn "zram не активен"
     fi
-    for svc in gamemode irqbalance ananicy-cpp earlyoom; do
+    if pkg_installed gamemode; then
+        ok "GameMode установлен (активируется по запросу игры)"
+    else
+        warn "GameMode не установлен"
+    fi
+    for svc in irqbalance ananicy-cpp earlyoom; do
         if systemctl is-enabled "${svc}.service" >/dev/null 2>&1; then
             ok "сервис ${svc} включён"
         else
@@ -110,135 +116,159 @@ cmd_info() {
 
 # ---------------------------------------------------------------- doctor
 cmd_doctor() {
-    local fix=0
+    local fix=0 problems=0 vendor="" nvidia_legacy=0
     [[ "${1:-}" == "--fix" ]] && fix=1
-    local problems=0
 
     hr
     printf '%sДиагностика FarchiOs%s\n' "$B" "$R"
     hr
 
-    # GPU / драйверы
-    local vendor=""
-    if lspci -nn 2>/dev/null | grep -qi '10de'; then vendor="nvidia"; fi
-    if lspci -nn 2>/dev/null | grep -qi '1002'; then vendor="${vendor:-amd}"; fi
-    if [[ -z "$vendor" ]] && lspci -nn 2>/dev/null | grep -qi '8086'; then vendor="intel"; fi
+    local pci
+    pci="$(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display' || true)"
+    if grep -qi '10de:' <<<"$pci"; then
+        vendor="nvidia"
+        if grep -Eqi 'GTX? (3|4|5|6|7|8|9|10)[0-9]{2}|GeForce (3|4|5|6|7|8|9|10)[0-9]{2}M?|Quadro [KMP][0-9]|Tesla|NVS' <<<"$pci"; then
+            nvidia_legacy=1
+        fi
+    fi
+    if grep -qi '1002:' <<<"$pci"; then vendor="${vendor:+$vendor+}amd"; fi
+    if grep -qi '8086:' <<<"$pci"; then vendor="${vendor:+$vendor+}intel"; fi
 
-    case "$vendor" in
-        nvidia)
-            if pacman -Qq nvidia-utils nvidia-dkms &>/dev/null; then ok "NVIDIA: драйвер установлен"; else
-                warn "NVIDIA: драйвер НЕ установлен"; problems=$((problems+1))
-                ((fix)) && farchios-gpu-setup
-            fi ;;
-        amd)
-            if pacman -Qq vulkan-radeon &>/dev/null; then ok "AMD: vulkan-radeon установлен"; else
-                warn "AMD: нет vulkan-radeon"; problems=$((problems+1))
-                ((fix)) && farchios-gpu-setup
-            fi ;;
-        intel)
-            if pacman -Qq vulkan-intel &>/dev/null; then ok "Intel: vulkan-intel установлен"; else
-                warn "Intel: нет vulkan-intel"; problems=$((problems+1))
-                ((fix)) && farchios-gpu-setup
-            fi ;;
-        *) warn "GPU не распознан — проверь lspci" ;;
-    esac
+    if [[ -z "$vendor" ]]; then
+        warn "GPU не распознан — проверь lspci"
+        problems=$((problems+1))
+    else
+        info "Обнаружены GPU: $vendor"
+        if (( fix )); then
+            /usr/local/bin/farchios-gpu-setup || warn "Автоустановка GPU-драйверов завершилась ошибкой"
+        fi
+        if [[ "$vendor" == *nvidia* ]]; then
+            if (( nvidia_legacy )); then
+                if pkg_installed vulkan-nouveau && pkg_installed lib32-vulkan-nouveau; then
+                    ok "NVIDIA legacy: Vulkan Nouveau установлен"
+                else
+                    warn "NVIDIA legacy: не хватает Vulkan Nouveau"; problems=$((problems+1))
+                fi
+            elif pkg_installed nvidia-utils && { pkg_installed nvidia-open-dkms || pkg_installed nvidia-open || pkg_installed nvidia-dkms; }; then
+                ok "NVIDIA: пользовательские библиотеки и модуль установлены"
+            else
+                warn "NVIDIA: не хватает драйвера или nvidia-utils"; problems=$((problems+1))
+            fi
+        fi
+        if [[ "$vendor" == *amd* ]]; then
+            if pkg_installed vulkan-radeon; then ok "AMD: Vulkan-драйвер установлен"
+            else warn "AMD: нет vulkan-radeon"; problems=$((problems+1)); fi
+        fi
+        if [[ "$vendor" == *intel* ]]; then
+            if pkg_installed vulkan-intel; then ok "Intel: Vulkan-драйвер установлен"
+            else warn "Intel: нет vulkan-intel"; problems=$((problems+1)); fi
+        fi
+    fi
 
-    # Vulkan
     if have vulkaninfo && vulkaninfo --summary &>/dev/null; then
         ok "Vulkan работает"
     else
         warn "Vulkan не отвечает (vulkaninfo --summary)"; problems=$((problems+1))
     fi
 
-    # 32-бит (Steam)
-    if pacman -Qq lib32-mesa &>/dev/null; then ok "32-битные библиотеки (multilib) есть"; else
-        warn "Нет lib32-mesa — Steam не запустится"; problems=$((problems+1))
+    if pkg_installed lib32-mesa || pkg_installed lib32-nvidia-utils; then
+        ok "32-битные графические библиотеки установлены"
+    else
+        warn "Не найдены 32-битные графические библиотеки"; problems=$((problems+1))
     fi
 
-    # Игровой стек
     for p in steam lutris gamemode mangohud gamescope wine; do
-        if pacman -Qq "$p" &>/dev/null; then ok "пакет $p установлен"; else
-            warn "пакет $p отсутствует"; problems=$((problems+1))
-            ((fix)) && pacman -S --needed --noconfirm "$p"
+        if pkg_installed "$p"; then
+            ok "Пакет $p установлен"
+        else
+            warn "Пакет $p отсутствует"; problems=$((problems+1))
+            if (( fix )); then
+                pacman -Syu --needed --noconfirm "$p" || warn "Не удалось установить $p"
+            fi
         fi
     done
 
-    # Сжатие шейдеров Vulkan (важно для AMD/Intel)
-    if [[ -f /etc/environment ]] && grep -q RADV_PERFTEST /etc/environment; then
-        ok "RADV-тюнинг применён"
-    else
-        info "RADV-тюнинг не задан (включи: sudo farchios tune)"
+    if (( fix )); then
+        info "Повторная проверка после попытки исправления..."
+        # Не запускаем повторно установку; итоговая проверка пакетов ниже.
+        local remaining=0
+        for p in steam lutris gamemode mangohud gamescope wine; do
+            pkg_installed "$p" || remaining=$((remaining+1))
+        done
+        if (( remaining == 0 )); then
+            ok "Игровые пакеты установлены"
+        else
+            warn "После исправления отсутствуют игровые пакеты: $remaining"
+        fi
     fi
 
     hr
     if (( problems == 0 )); then
-        ok "Всё в порядке. Запускай игры."
+        ok "Критических проблем не обнаружено."
     else
         warn "Найдено проблем: $problems"
-        ((fix)) || info "Запусти 'sudo farchios doctor --fix' для автопочинки"
+        (( fix )) || info "Запусти 'sudo farchios doctor --fix' для попытки исправления"
     fi
+    (( problems == 0 ))
 }
 
 # ---------------------------------------------------------------- tune
 cmd_tune() {
     need_root "$@"
-    info "Применяю игровой тюнинг..."
+    info "Применяю игровой профиль..."
 
     install -Dm644 /usr/local/share/farchios/sysctl/99-farchios-gaming.conf \
-        /etc/sysctl.d/99-farchios-gaming.conf 2>/dev/null || true
-    sysctl --system >/dev/null 2>&1 && ok "sysctl применён"
+        /etc/sysctl.d/99-farchios-gaming.conf
+    if sysctl -p /etc/sysctl.d/99-farchios-gaming.conf >/tmp/farchios-sysctl.log 2>&1; then
+        ok "sysctl-профиль применён"
+    else
+        cat /tmp/farchios-sysctl.log >&2
+        err "Не все параметры sysctl применились"
+        return 1
+    fi
 
-    systemctl enable --now fstrim.timer 2>/dev/null && ok "fstrim.timer включён"
+    systemctl enable --now fstrim.timer
+    ok "fstrim.timer включён"
 
     for svc in irqbalance ananicy-cpp earlyoom power-profiles-daemon; do
-        if pacman -Qq "$svc" &>/dev/null; then
-            systemctl enable --now "${svc}.service" 2>/dev/null && ok "включён ${svc}"
+        if pkg_installed "$svc"; then
+            if systemctl enable --now "${svc}.service"; then
+                ok "включён ${svc}"
+            else
+                warn "Не удалось включить ${svc}"
+            fi
         fi
     done
 
-    # zram
-    if pacman -Qq zram-generator &>/dev/null; then
+    if pkg_installed zram-generator; then
         systemctl daemon-reload
-        systemctl start systemd-zram-setup@zram0.service 2>/dev/null && ok "zram поднят"
+        if systemctl start dev-zram0.swap; then
+            ok "zram запущен"
+        else
+            warn "zram не удалось запустить; проверь zram-generator.conf"
+        fi
     fi
 
-    # Переменные окружения для Vulkan/Mesa
-    if ! grep -q "RADV_PERFTEST" /etc/environment 2>/dev/null; then
-        cat >> /etc/environment <<'EOF'
-# FarchiOs: производительность Vulkan/Mesa
-RADV_PERFTEST=gpl
-MESA_SHADER_CACHE_MAX_SIZE=12G
-MESA_SHADER_CACHE_DISABLE=false
-mesa_glthread=true
-VKD3D_FEATURE_LEVEL=12_2
-DXVK_HUD=fps
-PROTON_ENABLE_NVAPI=1
-EOF
-        ok "добавлены переменные окружения (RADV, shader cache, DXVK)"
-    else
-        info "переменные окружения уже на месте"
-    fi
-
-    # GPU governor
-    if [[ -d /sys/class/drm/card0/device/hwmon ]]; then
-        for f in /sys/class/drm/card0/device/hwmon/hwmon*/power_dpm_force_performance_level; do
-            [[ -e "$f" ]] && echo high > "$f" 2>/dev/null && ok "AMD GPU: performance level = high"
-        done
-    fi
-
-    ok "Тюнинг готов. Часть изменений применится после перелогина."
+    # Не задаём глобально DXVK_HUD, NVAPI и лимит DXVK/VKD3D:
+    # они меняют поведение игр и должны настраиваться пользователем отдельно.
+    ok "Игровой профиль применён. Перезагрузка рекомендуется."
 }
 
 # ---------------------------------------------------------------- gaming
 cmd_gaming() {
     need_root "$@"
-    info "Проверяю игровой стек..."
+    info "Устанавливаю игровой стек..."
     local pkgs=(steam lutris gamemode lib32-gamemode gamescope mangohud lib32-mangohud
                 wine wine-mono winetricks vkd3d lib32-vkd3d obs-studio discord)
-    pacman -S --needed --noconfirm "${pkgs[@]}" && ok "Игровой стек на месте"
-
-    systemctl enable --now gamemoded.service 2>/dev/null && ok "gamemoded запущен"
-    usermod -aG gamemode "${SUDO_USER:-$USER}" 2>/dev/null && ok "пользователь добавлен в группу gamemode"
+    pacman -Syu --needed --noconfirm "${pkgs[@]}"
+    if getent group gamemode >/dev/null 2>&1; then
+        local target_user="${SUDO_USER:-}"
+        if [[ -n "$target_user" && "$target_user" != root ]]; then
+            usermod -aG gamemode "$target_user"
+            ok "Пользователь $target_user добавлен в группу gamemode (нужен повторный вход)"
+        fi
+    fi
+    ok "Игровой стек установлен"
 }
 
 # ---------------------------------------------------------------- gpu
@@ -249,18 +279,32 @@ cmd_gpu() {
 
 # ---------------------------------------------------------------- aur
 cmd_aur() {
-    local user="${SUDO_USER:-$USER}"
-    if [[ ${EUID} -eq 0 && -z "${SUDO_USER:-}" ]]; then
-        err "paru нельзя собирать от root. Запусти от обычного пользователя."
-        exit 1
+    local build_user="${SUDO_USER:-${USER:-}}"
+    if [[ "$build_user" == "root" || -z "$build_user" ]]; then
+        err "Запусти команду из обычной пользовательской сессии."
+        return 1
     fi
-    if have paru; then ok "paru уже установлен"; return; fi
-    info "Устанавливаю paru..."
-    pacman -S --needed --noconfirm base-devel git
-    local tmp; tmp=$(mktemp -d)
-    git clone --depth=1 https://aur.archlinux.org/paru-bin.git "$tmp/paru-bin"
-    ( cd "$tmp/paru-bin" && makepkg -si --noconfirm )
-    rm -rf "$tmp"
+    if have paru; then ok "paru уже установлен"; return 0; fi
+
+    local tmp
+    tmp="$(mktemp -d /tmp/farchios-paru.XXXXXX)"
+    chown "$build_user":"$(id -gn "$build_user")" "$tmp"
+    trap 'rm -rf "$tmp"' RETURN
+
+    if (( EUID == 0 )); then
+        pacman -Syu --needed --noconfirm base-devel git
+        runuser -u "$build_user" -- git clone --depth=1 https://aur.archlinux.org/paru-bin.git "$tmp/paru-bin"
+        runuser -u "$build_user" -- bash -c "cd '$tmp/paru-bin' && makepkg --noconfirm --needed"
+        local pkg
+        pkg="$(find "$tmp/paru-bin" -maxdepth 1 -type f -name 'paru-bin-*.pkg.tar.*' ! -name '*.sig' | head -n1)"
+        [[ -n "$pkg" ]] || { err "makepkg не создал пакет paru"; return 1; }
+        pacman -U --needed --noconfirm "$pkg"
+    else
+        sudo pacman -Syu --needed --noconfirm base-devel git
+        git clone --depth=1 https://aur.archlinux.org/paru-bin.git "$tmp/paru-bin"
+        ( cd "$tmp/paru-bin" && makepkg --noconfirm --needed )
+        sudo pacman -U --needed --noconfirm "$tmp"/paru-bin/paru-bin-*.pkg.tar.*
+    fi
     ok "paru установлен"
 }
 
@@ -290,25 +334,101 @@ cmd_install() {
         err "Это не live-среда FarchiOs. Запускай из загруженного ISO."
         exit 1
     fi
+    have archinstall || { err "archinstall не установлен"; exit 1; }
+    have jq || { err "jq не установлен"; exit 1; }
+    have base64 || { err "base64 не найден"; exit 1; }
+
     cat <<'EOF'
 Установка FarchiOs на диск
 ──────────────────────────
-Откроется archinstall. Рекомендуемые настройки:
+Откроется Archinstall с заранее подготовленным профилем FarchiOs:
+  • KDE Plasma + SDDM
+  • PipeWire
+  • multilib и игровой пакетный набор
+  • фирменные команды FarchiOs и first-boot настройка
+  • загрузчик будет выбран с учётом режима BIOS/UEFI
 
-  • Диск         : выбери свой SSD/NVMe (всё будет стёрто!)
-  • ФС           : btrfs (снимки) или ext4 (проще)
-  • Профиль      : Desktop → KDE Plasma  (или minimal)
-  • Ядро         : linux
-  • Загрузчик    : systemd-boot (UEFI) / GRUB (BIOS)
-  • Доп. пакеты  : см. /etc/farchios/postinstall-packages.txt
-  • Post-install : /usr/local/bin/farchios-postinstall
+В Archinstall тебе останется выбрать диск, разметку, пользователя,
+пароль и проверить итоговую конфигурацию.
 
-После установки: перезагрузись, зайди в систему и выполни
-  sudo farchios-postinstall
+ВНИМАНИЕ: выбранный диск может быть полностью очищен.
+Ничего не подтверждай, пока не проверишь выбранный накопитель.
 EOF
-    read -r -p "Продолжить? [y/N] " a
-    [[ "${a,,}" == "y" ]] || exit 0
-    archinstall
+    read -r -p "Открыть установщик? [y/N] " answer
+    [[ "${answer,,}" == "y" ]] || return 0
+
+    local payload config packages_json bootloader gfx_driver
+    config="$(mktemp /tmp/farchios-archinstall.XXXXXX.json)"
+    trap 'rm -f "$config"' RETURN
+
+    # Встраиваем системные файлы в custom_commands. Команда выполняется
+    # archinstall внутри установленной системы (arch-chroot), а не в Live ISO.
+    payload="$(
+        tar -C "$PROFILE/airootfs" -czf - \
+            usr/local/bin/farchios \
+            usr/local/bin/farchios-firstboot \
+            usr/local/bin/farchios-gpu-setup \
+            usr/local/bin/farchios-postinstall \
+            usr/local/share/farchios \
+            etc/systemd/system/farchios-firstboot.service \
+            etc/systemd/zram-generator.conf \
+            etc/security/limits.d/99-farchios-gaming.conf \
+            etc/udev/rules.d/60-farchios-iosched.rules \
+        | base64 -w0
+    )"
+
+    packages_json="$(
+        grep -vE '^[[:space:]]*(#|$)' "$PROFILE/packages.x86_64" |
+            sed 's/[[:space:]]*#.*$//' |
+            jq -Rsc 'split("\n") | map(select(length > 0))'
+    )"
+
+    if [[ -d /sys/firmware/efi ]]; then
+        bootloader="systemd-bootctl"
+    else
+        bootloader="grub-install"
+    fi
+    gfx_driver="All open-source (default)"
+    if lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display' | grep -qi '10de:'; then
+        if ! lspci 2>/dev/null | grep -Ei 'GTX? (3|4|5|6|7|8|9|10)[0-9]{2}|GeForce (3|4|5|6|7|8|9|10)[0-9]{2}M?|Quadro [KMP][0-9]|Tesla|NVS' >/dev/null; then
+            gfx_driver="Nvidia (open kernel module for newer GPUs, Turing+)"
+        fi
+    fi
+
+    jq -n \
+        --arg payload "$payload" \
+        --arg bootloader "$bootloader" \
+        --arg gfx_driver "$gfx_driver" \
+        --argjson packages "$packages_json" \
+        '{
+          "bootloader": $bootloader,
+          "kernels": ["linux"],
+          "mirror-region": {"Worldwide": {"https://geo.mirror.pkgbuild.com/$repo/os/$arch": true}},
+          "additional-repositories": "multilib",
+          "packages": $packages,
+          "profile": {
+            "main": "desktop",
+            "details": "plasma",
+            "gfx_driver": $gfx_driver,
+            "greeter_type": "sddm"
+          },
+          "audio_config": {"audio": "pipewire"},
+          "services": [
+            "NetworkManager.service",
+            "bluetooth.service",
+            "sddm.service",
+            "fstrim.timer",
+            "NetworkManager-wait-online.service"
+          ],
+          "ntp": true,
+          "custom_commands": [
+            ("bash -c \u0027printf %s " + $payload +
+             " | base64 -d | tar -xz -C / && chmod 755 /usr/local/bin/farchios /usr/local/bin/farchios-firstboot /usr/local/bin/farchios-gpu-setup /usr/local/bin/farchios-postinstall && systemctl enable farchios-firstboot.service\u0027")
+          ]
+        }' > "$config"
+
+    info "Запускаю Archinstall с профилем FarchiOs..."
+    archinstall --config "$config"
 }
 
 # ---------------------------------------------------------------- update

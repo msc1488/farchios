@@ -1,78 +1,91 @@
 #!/usr/bin/env bash
-# ============================================================
-#  farchios-gpu-setup — определение GPU и установка драйверов
-#  Идемпотентен: можно запускать сколько угодно раз.
-# ============================================================
-set -uo pipefail
+# FarchiOs GPU setup — safe for hybrid Intel/AMD/NVIDIA systems.
+set -Eeuo pipefail
 
-if [[ ${EUID} -ne 0 ]]; then
-    echo "Запусти через sudo: sudo farchios-gpu-setup" >&2
+if (( EUID != 0 )); then
+    echo "Запусти через sudo: sudo farchios gpu" >&2
     exit 1
 fi
 
-C_OK=$'\e[32m'; C_W=$'\e[33m'; C_ERR=$'\e[31m'; C_R=$'\e[0m'
-ok()   { printf '%s✓%s %s\n' "$C_OK" "$C_R" "$*"; }
-warn() { printf '%s!%s %s\n' "$C_W"  "$C_R" "$*"; }
-err()  { printf '%s✗%s %s\n' "$C_ERR" "$C_R" "$*"; }
+for cmd in lspci pacman; do
+    command -v "$cmd" >/dev/null 2>&1 || {
+        echo "Не найдена команда: $cmd (проверь пакет pciutils/pacman)." >&2
+        exit 1
+    }
+done
 
-mapfile -t GPUS < <(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display')
-if [[ ${#GPUS[@]} -eq 0 ]]; then
-    err "GPU не найден через lspci. Установлен ли pciutils?"
+mapfile -t GPUS < <(lspci -nn 2>/dev/null | grep -Ei 'vga|3d|display' || true)
+if (( ${#GPUS[@]} == 0 )); then
+    echo "GPU не найден через lspci." >&2
     exit 1
 fi
 
 printf 'Найдено видеоустройств: %d\n' "${#GPUS[@]}"
 printf '  %s\n' "${GPUS[@]}"
 
-has_nvidia=0; has_amd=0; has_intel=0
-for g in "${GPUS[@]}"; do
-    [[ "$g" == *"[10de:"* ]] && has_nvidia=1
-    [[ "$g" == *"[1002:"* ]] && has_amd=1
-    [[ "$g" == *"[8086:"* ]] && has_intel=1
+has_nvidia=0
+has_nvidia_legacy=0
+has_amd=0
+has_intel=0
+for gpu in "${GPUS[@]}"; do
+    if [[ "$gpu" == *"[10de:"* ]]; then
+        # Arch's current open kernel module supports Turing (GTX 16/RTX 20)
+        # and newer. Pascal/Maxwell/older require a legacy driver branch.
+        if grep -Eqi 'GTX? (3|4|5|6|7|8|9|10)[0-9]{2}|GeForce (3|4|5|6|7|8|9|10)[0-9]{2}M?|Quadro [KMP][0-9]|Tesla|NVS' <<<"$gpu"; then
+            has_nvidia_legacy=1
+        else
+            has_nvidia=1
+        fi
+    fi
+    [[ "$gpu" == *"[1002:"* ]] && has_amd=1
+    [[ "$gpu" == *"[8086:"* ]] && has_intel=1
 done
 
-# multilib нужен для 32-битных библиотек (Steam, Wine)
-if ! grep -q '^\[multilib\]' /etc/pacman.conf 2>/dev/null; then
-    warn "multilib отключён — включаю"
-    sed -i '/^#\[multilib\]/,/^#Include/ s/^#//' /etc/pacman.conf
-    pacman -Sy --noconfirm
+pkgs=()
+if (( has_nvidia )); then
+    pkgs+=(nvidia-open-dkms nvidia-utils nvidia-settings lib32-nvidia-utils libva-nvidia-driver linux-headers)
+fi
+if (( has_nvidia_legacy )); then
+    echo "Обнаружена старая NVIDIA: официальный open-модуль Arch её не поддерживает."
+    echo "Оставляю открытый драйвер Nouveau из профиля установки; автоматическую замену не выполняю."
+    pkgs+=(vulkan-nouveau lib32-vulkan-nouveau)
+fi
+if (( has_amd )); then
+    pkgs+=(mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon
+           libva-mesa-driver lib32-libva-mesa-driver radeontop)
+fi
+if (( has_intel )); then
+    pkgs+=(mesa lib32-mesa vulkan-intel lib32-vulkan-intel
+           intel-media-driver libva-intel-driver)
 fi
 
-install_pkgs() {
-    local label="$1"; shift
-    printf '\n→ %s: %s\n' "$label" "$*"
-    pacman -S --needed --noconfirm "$@" || { err "Не удалось поставить: $*"; return 1; }
-    ok "$label готов"
-}
+if (( ${#pkgs[@]} == 0 )); then
+    echo "Не удалось определить подходящий набор GPU-пакетов. Ничего не устанавливалось." >&2
+    exit 1
+fi
+
+# Arch не поддерживает частичные обновления: обновляем систему вместе с пакетами.
+echo "Обновляю систему и устанавливаю подходящие драйверы..."
+pacman -Syu --needed --noconfirm "${pkgs[@]}"
 
 if (( has_nvidia )); then
-    # Turing (RTX 20xx) и новее → можно nvidia-open-dkms; nvidia-dkms универсален.
-    nv_list=(nvidia-utils nvidia-settings lib32-nvidia-utils libva-nvidia-driver nvidia-dkms
-             linux-headers)
-    install_pkgs "NVIDIA" "${nv_list[@]}"
-    # Wayland + NVIDIA: включаем DRM KMS и modeset
-    if [[ -f /etc/mkinitcpio.conf ]] && ! grep -q 'nvidia_drm.modeset' /etc/kernel/cmdline 2>/dev/null; then
-        warn "Для NVIDIA на Wayland добавь в параметры ядра: nvidia_drm.modeset=1"
-    fi
-    if [[ -f /etc/modprobe.d/nvidia.conf ]]; then
-        grep -q 'NVreg_PreserveVideoMemoryAllocations' /etc/modprobe.d/nvidia.conf || \
-            echo 'options nvidia NVreg_PreserveVideoMemoryAllocations=1' >> /etc/modprobe.d/nvidia.conf
-    else
-        echo 'options nvidia NVreg_PreserveVideoMemoryAllocations=1' > /etc/modprobe.d/nvidia.conf
-    fi
-    systemctl enable --now nvidia-suspend.service nvidia-hibernate.service nvidia-resume.service 2>/dev/null
-    ok "NVIDIA: suspend/resume и сохранение VRAM настроены"
+    install -d -m 755 /etc/modprobe.d
+    cat > /etc/modprobe.d/farchios-nvidia.conf <<'EOF'
+options nvidia NVreg_PreserveVideoMemoryAllocations=1
+options nvidia_drm modeset=1
+EOF
+
+    # Сервисы присутствуют не во всех вариантах пакетов/драйверов.
+    for unit in nvidia-suspend.service nvidia-hibernate.service nvidia-resume.service; do
+        if systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q "$unit"; then
+            systemctl enable "$unit"
+        fi
+    done
 fi
 
-if (( has_amd )); then
-    install_pkgs "AMD" mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon \
-        libva-mesa-driver lib32-libva-mesa-driver radeontop
+if command -v mkinitcpio >/dev/null 2>&1; then
+    mkinitcpio -P
 fi
 
-if (( has_intel )); then
-    install_pkgs "Intel" mesa lib32-mesa vulkan-intel lib32-vulkan-intel \
-        intel-media-driver libva-intel-driver
-fi
-
-printf '\n'
-ok "Драйверы GPU настроены. Перезагрузись (sudo reboot)."
+echo
+echo "Драйверы установлены. Перезагрузи компьютер: sudo reboot"
